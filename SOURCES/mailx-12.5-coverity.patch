@@ -1,0 +1,227 @@
+diff --git a/aux.c b/aux.c
+index e51a19a..2733787 100644
+--- a/aux.c
++++ b/aux.c
+@@ -904,7 +904,7 @@ getrandstring(size_t length)
+ 			data[i] = (int)(255 * (rand() / (RAND_MAX + 1.0))) ^
+ 				nodedigest[i % sizeof nodedigest];
+ 	}
+-	if (fd > 0)
++	if (fd >= 0)
+ 		close(fd);
+ 	cp = memtob64(data, length);
+ 	rp = salloc(length+1);
+diff --git a/cache.c b/cache.c
+index 9cf7587..a71b019 100644
+--- a/cache.c
++++ b/cache.c
+@@ -588,6 +588,7 @@ cache_setptr(int transparent)
+ 		message[i].m_uid = contents[i];
+ 		getcache1(&mb, &message[i], NEED_UNSPEC, 3);
+ 	}
++	free(contents);
+ 	ok = OKAY;
+ 	if (ok == OKAY) {
+ 		mb.mb_type = MB_CACHE;
+diff --git a/cmd3.c b/cmd3.c
+index cb19e2b..2a5ea68 100644
+--- a/cmd3.c
++++ b/cmd3.c
+@@ -835,7 +835,7 @@ cfile(void *v)
+ 		newfileinfo();
+ 		return 0;
+ 	}
+-	strncpy(mboxname, expand("&"), sizeof mboxname)[sizeof mboxname-1]='\0';
++	strncpy(mboxname, expand("&"), sizeof mboxname-1)[sizeof mboxname-1]='\0';
+ 	return file1(*argv);
+ }
+ 
+@@ -1344,7 +1344,7 @@ account(void *v)
+ 			a->ac_name = NULL;
+ 		return define1(args[0], 1);
+ 	}
+-	strncpy(mboxname, expand("&"), sizeof mboxname)[sizeof mboxname-1]='\0';
++	strncpy(mboxname, expand("&"), sizeof mboxname-1)[sizeof mboxname-1]='\0';
+ 	oqf = savequitflags();
+ 	if ((a = get_oldaccount(args[0])) == NULL) {
+ 		if (args[1]) {
+diff --git a/collect.c b/collect.c
+index 953ae07..949fd32 100644
+--- a/collect.c
++++ b/collect.c
+@@ -902,6 +902,11 @@ cont:
+ 	}
+ 	goto out;
+ err:
++	if (linebuf != NULL) {
++		free(linebuf);
++		linebuf = NULL;
++	}
++
+ 	if (collf != NULL) {
+ 		Fclose(collf);
+ 		collf = NULL;
+@@ -909,6 +914,9 @@ err:
+         exit(1);
+     }
+ out:
++	if (linebuf != NULL)
++		free(linebuf);
++
+ 	if (collf != NULL) {
+ 		if ((cp = value("MAILX_TAIL")) != NULL) {
+ 			if (is_a_tty[0])
+diff --git a/imap.c b/imap.c
+index 66e0a6b..28b5e22 100644
+--- a/imap.c
++++ b/imap.c
+@@ -1181,8 +1181,10 @@ imap_setfile1(const char *xserver, int newmail, int isedit, int transparent)
+ 	if (!same_imap_account) {
+ 		if (!disconnected(account) &&
+ 				sopen(sp, &so, use_ssl, uhp,
+-				use_ssl ? "imaps" : "imap", verbose) != OKAY)
+-		return -1;
++				use_ssl ? "imaps" : "imap", verbose) != OKAY) {
++			free(account);
++			return -1;
++		}
+ 	} else
+ 		so = mb.mb_sock;
+ 	if (!transparent)
+diff --git a/macro.c b/macro.c
+index 741343b..6aba6aa 100644
+--- a/macro.c
++++ b/macro.c
+@@ -128,6 +128,7 @@ define1(const char *name, int account)
+ 					mp->ma_name);
+ 			if (sourcing)
+ 				unstack();
++			freelines(lst);
+ 			free(mp->ma_name);
+ 			free(mp);
+ 			return 1;
+diff --git a/main.c b/main.c
+index 573ec9c..f7612a5 100644
+--- a/main.c
++++ b/main.c
+@@ -462,7 +462,7 @@ usage:
+ 		 */
+ 		if ((cp = value("folder")) != NULL &&
+ 				which_protocol(cp) == PROTO_IMAP)
+-			strncpy(mailname, cp, PATHSIZE)[PATHSIZE-1] = '\0';
++			strncpy(mailname, cp, PATHSIZE-1)[PATHSIZE-1] = '\0';
+ 	}
+ 	i = setfile(ef, 0);
+ 	if (i < 0)
+@@ -500,7 +500,7 @@ usage:
+ 		safe_signal(SIGINT, SIG_IGN);
+ 		safe_signal(SIGQUIT, SIG_IGN);
+ 	}
+-	strncpy(mboxname, expand("&"), sizeof mboxname)[sizeof mboxname-1]='\0';
++	strncpy(mboxname, expand("&"), sizeof mboxname-1)[sizeof mboxname-1]='\0';
+ 	quit();
+ 	return exit_status;
+ }
+diff --git a/popen.c b/popen.c
+index 348fd1e..9520b41 100644
+--- a/popen.c
++++ b/popen.c
+@@ -246,9 +246,11 @@ Zopen(const char *file, const char *mode, int *compression)
+ open:	if ((output = Ftemp(&tempfn, "Rz", "w+", 0600, 0)) == NULL) {
+ 		perror(catgets(catd, CATSET, 167, "tmpfile"));
+ 		close(input);
++		Ftfree(&tempfn);
+ 		return NULL;
+ 	}
+ 	unlink(tempfn);
++	Ftfree(&tempfn);
+ 	if (input >= 0 || (*compression&FP_MASK) == FP_IMAP ||
+ 			(*compression&FP_MASK) == FP_MAILDIR) {
+ 		if (decompress(*compression, input, fileno(output)) < 0) {
+diff --git a/quit.c b/quit.c
+index f70aec2..1827516 100644
+--- a/quit.c
++++ b/quit.c
+@@ -141,7 +141,7 @@ quit(void)
+ 	FILE *fbuf, *rbuf, *readstat = NULL, *abuf;
+ 	struct message *mp;
+ 	int c;
+-	char *tempResid;
++	char *tempResid = NULL;
+ 	struct stat minfo;
+ 
+ 	/*
+@@ -313,6 +313,8 @@ cream:
+ 
+ newmail:
+ 	printf(catgets(catd, CATSET, 166, "Thou hast new mail.\n"));
++	if (tempResid != NULL)
++		Ftfree(&tempResid);
+ 	if (fbuf != NULL) {
+ 		Fclose(fbuf);
+ 		dot_unlock(mailname);
+diff --git a/send.c b/send.c
+index ea3d5b7..40e6bda 100644
+--- a/send.c
++++ b/send.c
+@@ -568,6 +568,7 @@ skip:	switch (ip->m_mimecontent) {
+ 						Pclose(obuf);
+ 						safe_signal(SIGPIPE, oldpipe);
+ 					}
++					obuf = origobuf;
+ 				}
+ 			}
+ 			return rt;
+diff --git a/sendout.c b/sendout.c
+index f83952a..e734ee2 100644
+--- a/sendout.c
++++ b/sendout.c
+@@ -463,6 +463,7 @@ infix(struct header *hp, FILE *fi, int dosign)
+ 	if ((nfi = Fopen(tempMail, "r")) == NULL) {
+ 		perror(tempMail);
+ 		Fclose(nfo);
++		Ftfree(&tempMail);
+ 		return(NULL);
+ 	}
+ 	rm(tempMail);
+@@ -1511,6 +1512,7 @@ resend_msg(struct message *mp, struct name *to, int add_resent)
+ 	if ((nfi = Fopen(tempMail, "r")) == NULL) {
+ 		senderr++;
+ 		perror(tempMail);
++		Ftfree(&tempMail);
+ 		return STOP;
+ 	}
+ 	rm(tempMail);
+diff --git a/smtp.c b/smtp.c
+index baab5d1..ce6870e 100644
+--- a/smtp.c
++++ b/smtp.c
+@@ -334,6 +334,7 @@ talk_smtp(struct name *to, FILE *fi, struct sock *sp,
+ 							  password);
+ 			b64 = memtob64(o, strlen(user)+strlen(password)+2);
+ 			snprintf(o, sizeof o, "%s\r\n", b64);
++			free(b64);
+ 			SMTP_OUT(o);
+ 			SMTP_ANSWER(2);
+ 			break;
+diff --git a/ssl.c b/ssl.c
+index 6a0b322..7fbe4a3 100644
+--- a/ssl.c
++++ b/ssl.c
+@@ -135,6 +135,8 @@ smime_split(FILE *ip, FILE **hp, FILE **bp, long xcount, int keep)
+ 	if ((*hp = Ftemp(&hn, "Rh", "w+", 0600, 1)) == NULL ||
+ 			(*bp = Ftemp(&bn, "Rb", "w+", 0600, 1)) == NULL) {
+ 		perror("tempfile");
++		if (hn)
++			Ftfree(&hn);
+ 		return STOP;
+ 	}
+ 	rm(hn);
+@@ -178,6 +180,7 @@ smime_split(FILE *ip, FILE **hp, FILE **bp, long xcount, int keep)
+ 		fwrite(buf, sizeof *buf, buflen, *bp);
+ 	fflush(*bp);
+ 	rewind(*bp);
++	free(savedfields);
+ 	free(buf);
+ 	return OKAY;
+ }
